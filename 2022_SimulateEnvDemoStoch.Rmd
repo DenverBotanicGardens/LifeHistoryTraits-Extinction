@@ -1,0 +1,286 @@
+---
+title: "2022_SimulateEnvDemoStoch.Rmd"
+output: html_document
+---
+
+
+
+```{r}
+# 1 high low P_a
+P_a <- c(min(lh$P_a),min(lh$P_a[lh$P_a > 0]), max(lh$P_a))
+age <- do.call(rbind, lapply(P_a, function(pa){
+  data.frame(P_a = pa, age = c(min(lh$age[lh$P_a == pa]),max(lh$age[lh$P_a == pa])))
+}))
+
+m <- do.call(rbind,lapply(1:nrow(age), function(i){
+  data.frame(age[i,], m = c(min(lh$m[lh$P_a == age$P_a[i] & lh$age == age$age[i]]),
+                           max(lh$m[lh$P_a == age$P_a[i] & lh$age == age$age[i]])))
+}))
+(m <- m[!duplicated(m),])
+
+# Can't get additional P_j
+## high and low when itero and semel
+# P_jsem <- c(min(lh$P_j[lh$P_a == 0]), max(lh$P_j[lh$P_a == 0]))
+# P_jite <- c(min(lh$P_j[lh$P_a > 0]), max(lh$P_j[lh$P_a > 0]))
+# 
+# P_j <- do.call(rbind,lapply(P_a, function(pa){
+#   data.frame(P_a = pa, P_j = c(min(lh$P_j[lh$P_a == pa ]),
+#                             max(lh$P_j[lh$P_a == pa ])))
+#   }))
+# (P_j <- lh[lh$P_a %in% P_j$P_a & lh$P_j %in% P_j$P_j,])
+(m <- lh[lh$m %in% m$m & lh$P_a %in% m$P_a & lh$age %in% m$age,])
+sampledLHs <- which(lh$m %in% m$m & lh$P_a %in% m$P_a & lh$age %in% m$age)
+
+```
+
+
+Run with simEnv.lite to keep data needs down
+```{r}
+sampszMxdemo <- 99 # number of new matrices to make
+simsampsz <- 99
+sig2d <- c(0.001, 1e-5) 
+sig2es <- c(0.3, 1) # [1] 0.30 0.65 1.00
+Y <- 100
+StPopSz <- c(50,500)
+
+
+registerDoParallel(detectCores()-2)
+# age = 1,5,7,15
+# m = 1,2,9,15,150,200
+# P_a = 0,0.05,0.9
+# A_LH_D =  20  27  93 128 132   1 102 127
+AllEnvDemo.Xitero <- foreach(rowN = sampledLHs, 
+                             .packages = c("popbio","foreach"),
+                          .combine = c, .inorder = TRUE, .multicombine = TRUE) %dopar% {
+                            foreach(sps = StPopSz) %dopar% {
+                              foreach(s2e = sig2es) %dopar% { ## environmental stochasticity
+                                foreach(envType = c("auto","lin")) %dopar% {
+                                  foreach(s2s = sig2d) %do% { ## demographic stochasticity
+        
+        MPMs1 <- MPM_stoch(sampsz = sampszMxdemo, age1 = lh$age[rowN],
+                           p_a = lh$P_a[rowN], p_j = lh$P_j[rowN],
+                           m1 = lh$m[rowN], sig2D = s2s)
+        
+        simOut <- simEnv.lite(MPMs1, nreps = simsampsz, Y = Y, StPopSz = sps, 
+                         e = 0, betaS = 1, betaF = -1, sig2 = s2e, 
+                         beta0climate = 0, beta1climate = 0.8, envsto = envType)
+        
+        data.frame(simOut, 
+                   ageLH = lh$age[rowN], P_aLH = lh$P_a[rowN], 
+                   mLH = lh$m[rowN], P_jLH = lh$P_j[rowN],
+                   sig2d = s2s, 
+                   A_LH_D = rowN)
+        } # end demo sig2 MPMs1sig2d
+      } #  dfsig2D.E 
+    } # environmental stoch type
+  } # dfsigDEStPop 
+}
+
+
+save(AllEnvDemo.Xitero, file = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/AllnvDemo_Xitero", Sys.Date(),".Rdata", sep = ""))
+  
+```
+
+
+# Load fresh from already run
+###############################################################################
+###############################################################################
+###############################################################################
+###############################################################################
+load and bind
+```{r}
+# savedDate <- "2022-03-06"
+# savedDate <- "2022-03-09"
+savedDate <- "2022-03-16"
+# load(paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/AllnvDemo",savedDate,".Rdata", sep = ""))
+
+load(paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/AllnvDemo_Xitero", savedDate,".Rdata", sep = ""))
+
+
+
+envDemo <- do.call(rbind, sapply(AllEnvDemo.Xitero, function(A1){
+  do.call(rbind, sapply(A1, function(A2) A2 ))
+}))
+
+# rm(AllEnvDemo)
+rm(AllEnvDemo.Xitero)
+gc()
+
+# envDemoXtra <- do.call(rbind, sapply(AllEnvDemo.Xitero, function(A1){
+#   do.call(rbind, sapply(A1, function(A2) A2))
+# }))
+# 
+# envDemo <- rbind(envDemo, envDemoXtra)
+# rm(AllEnvDemo.Xitero)
+# rm(envDemoXtra)
+
+# gc()
+```
+
+
+```{r}
+
+
+## Only 4 levels
+# envDemo$mbin <- ifelse(envDemo$mOrig < 10, 
+#                        as.character(cut_number(envDemo$mOrig[envDemo$mOrig < 10], 1)), 
+#                             as.character(cut_number(envDemo$mOrig[envDemo$mOrig > 9], 1)))
+
+envDemo$climate[grep("lin",envDemo$climate)] <- "linear"
+envDemo$parity <- "itero"
+envDemo$parity[envDemo$P_aLH == 0] <- "semel"
+envDemo$pjbin <- cut_number(envDemo$P_jLH, 3)
+
+
+```
+
+```{r}
+colfunc<-colorRampPalette(c("red","gold","springgreen","royalblue"))
+
+Time2Exta <- ggplot(envDemo, aes(Year, colour = as.factor(age), 
+                                 group = interaction(age,sig2e), linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 1)+
+  facet_grid(parity + sig2d  ~ climate + StPopSz)+ 
+  scale_color_manual(expression(alpha), values = colfunc(4))+
+  scale_linetype(expression(sigma[E]^2))+
+  theme_bw()+
+  ylab("Extinction Risk")+
+  xlab("")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  ggtitle("a)") 
+
+Time2Extb <- ggplot(envDemo, aes(Year, colour = pjbin, group = interaction(pjbin, sig2e),
+                                 linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 1)+
+  facet_grid(parity + sig2d  ~ climate + StPopSz)+ 
+  scale_color_manual(expression(P[j]), values = colfunc(4))+
+  scale_linetype(expression(sigma[E]^2))+
+  theme_bw()+
+  ylab("Extinction Risk")+
+  xlab("")+
+  ylab("")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  guides(color = guide_legend(order = 1))+
+  ggtitle("b)") 
+
+Time2Extc <- ggplot(envDemo, aes(Year, colour = as.factor(mLH), group = interaction(mLH, sig2e),
+                                 linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 1)+
+  facet_grid(parity + sig2d  ~ climate + StPopSz)+ 
+  scale_color_manual(expression(m), values = colfunc(6))+
+  scale_linetype(expression(sigma[E]^2))+
+  theme_bw()+
+  ylab("Extinction Risk")+
+  # xlab("")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  guides(color = guide_legend(order = 1))+
+  ggtitle("c)") 
+
+Time2Extd <- ggplot(envDemo, aes(Year, colour = as.factor(P_aLH), group = interaction(P_aLH, sig2e),
+                                 linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 1)+
+  facet_grid(parity + sig2d  ~ climate + StPopSz)+ 
+  scale_color_manual(expression(P[a]), values = colfunc(6))+
+  scale_linetype(expression(sigma[E]^2))+
+  theme_bw()+
+  # xlab("")+
+  ylab("")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  guides(color = guide_legend(order = 1))+
+  ggtitle("d)") 
+
+ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/envDemoTime2Ext", Sys.Date(),".jpg", sep=""),
+  (Time2Exta + Time2Extb)/(Time2Extc + Time2Extd),
+width=270, height=250,units='mm', dpi=300)
+
+```
+
+
+```{r}
+ProbExt.envdemo <- do.call(rbind, lapply(split(envDemo, list(envDemo$StPopSz,
+                                                             envDemo$sig2e,
+                                                             envDemo$sig2d,
+                                                             envDemo$climate,
+                                                             envDemo$A_LH_D)), 
+             function(x){
+         data.frame(StPopSz = x$StPopSz[1], sig2e = x$sig2e[1], sig2d = x$sig2d[1],
+             PopSz = x$N[1], ProbExt100yrs = sum(x$Ext)/nrow(x),
+             ProbExt30yrs = sum(x$Ext[x$Year < 31])/nrow(x),
+             ProbExt10yrs = sum(x$Ext[x$Year < 11])/nrow(x),
+             pa = x$P_aLH[1], pj = x$P_jLH[1], age = x$ageLH[1], m = x$mLH[1],
+             parity = x$parity[1],
+             pjbin = x$pjbin[1],
+             climate = x$climate[1])
+}))
+rm(envDemo)
+gc()
+table(ProbExt.envdemo$parity)
+
+```
+
+```{r}
+EPa <- ggplot(ProbExt.envdemo, aes(x = interaction(sig2e,climate), 
+                                   ProbExt10yrs, color = as.factor(age)))+
+  geom_boxplot()+
+  theme_bw()+
+  scale_color_manual(expression(alpha), values = colfunc(4))+
+  facet_grid(sig2d ~ parity + StPopSz, 
+             # labeller = label_value(labels = 
+             #                          c(label_bquote(rows = sigma[E]^2~":"~.(sig2e)),
+             #                                     label_bquote(rows = sigma[D]^2~":"~.(sig2d)))))+
+             labeller = label_bquote(rows = sigma[D]^2~":"~.(sig2d)))+
+  xlab(expression(sigma[E]^2 ~ "."~ D))+
+  ylab("EP (10 years)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("a)")
+
+EPb <- ggplot(ProbExt.envdemo, aes(x = interaction(sig2e,climate), 
+                                   ProbExt10yrs, colour = as.factor(pjbin)))+
+  geom_boxplot()+
+  theme_bw()+
+  scale_color_manual(expression(P[j]), values = colfunc(4))+
+  facet_grid(sig2d ~ parity + StPopSz, 
+             labeller = label_bquote(rows = sigma[D]^2~":"~.(sig2d)))+
+  xlab(expression(D))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ylab("EP (10 years)")+
+  ggtitle("b)")
+
+EPc <- ggplot(ProbExt.envdemo, aes(x = interaction(sig2e,climate), 
+                                   ProbExt10yrs, colour = as.factor(m)))+
+  geom_boxplot()+
+  theme_bw()+
+  scale_color_manual(expression(m), values = colfunc(6))+
+  facet_grid(sig2d ~ parity + StPopSz, 
+             labeller = label_bquote(rows = sigma[D]^2~":"~.(sig2d)))+
+  xlab(expression(D))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ylab("EP (10 years)")+
+  ggtitle("c)")
+
+EPd <- ggplot(ProbExt.envdemo, aes(x = interaction(sig2e,climate), 
+                                   ProbExt10yrs, colour = as.factor(pa)))+
+  geom_boxplot()+
+  scale_color_manual(expression(P[a]), values = colfunc(3))+
+  theme_bw()+
+  facet_grid(sig2d ~ parity + StPopSz, 
+             labeller = label_bquote(rows = sigma[D]^2~":"~.(sig2d)))+
+  xlab(expression(D))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ylab("EP (10 years)")+
+  ggtitle("c)")
+
+
+ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/ProbExt_envdemo", Sys.Date(),".jpg", sep=""),
+  (EPa + EPb)/(EPc + EPd)+
+  plot_annotation(title = "Demographic and Environmental Stochasticity",
+                  caption = expression("m: fecudnity;"~alpha*": age of reproductive maturity;"~P[j]*": juvenile survival;"~P[a]~": adult survival; x: stage")),
+width=270, height=210,units='mm', dpi=300)
+
+
+
+
+```
+
+
+

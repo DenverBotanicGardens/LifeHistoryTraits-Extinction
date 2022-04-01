@@ -1,0 +1,548 @@
+---
+title: "Simulate environmental stochasticity"
+output: html_document
+---
+
+Simulate environmental stochasticity across life history traits
+
+Parallel version
+```{r}
+
+
+## Across starting populations sizes # With a little bit of demographic error around with a beta distribution
+sampsz <- 99
+sig2es <- seq(0.3, 1, length.out = 3)  # [1] 0.30 0.65 1.00
+Y <- 100
+StPopSz <- c(50,100,500)
+
+
+registerDoParallel(detectCores()-2)
+
+envSimsamplh <- foreach(s2e = sig2es, .packages = c("popbio","foreach"), 
+                        .combine = rbind) %dopar% {
+                    foreach(sps = StPopSz, .combine = rbind) %do% {
+                      simEnv(MPMs_all, nreps = sampsz, Y = 100, StPopSz = sps, 
+                             e = 0, betaS = 1, betaF = -1, sig2 = s2e, 
+                             beta0climate = 0, beta1climate = 0.8, envsto = "auto")
+                    }
+                          }
+
+
+save(envSimsamplh, file = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/envSimAllauto", Sys.Date(),".Rdata", sep = ""))
+
+envSimsamplhlinear <- foreach(s2e = sig2es, 
+                              .packages = c("popbio","foreach"), .combine = rbind) %dopar% {
+                    foreach(sps = StPopSz, .combine = rbind) %do% {
+                      simEnv(MPMs_all, nreps = sampsz, Y = 100, StPopSz = sps, 
+                             e = 0, betaS = 1, betaF = -1, sig2 = s2e, 
+                             beta0climate = 0, beta1climate = 0.02, envsto = "lin")
+                    }
+                          }
+
+
+save(envSimsamplhlinear, file = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/envSimAllline", Sys.Date(),".Rdata", sep = ""))
+
+
+```
+
+
+
+Load
+```{r}
+datesaved <- "2022-03-07"
+load(paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/envSimAllline", datesaved,".Rdata", sep = ""))
+load(paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/envSimAllauto",datesaved,".Rdata", sep = ""))
+
+```
+
+Autoregressive and linear environment
+```{r}
+
+envSim <- rbind(envSimsamplh, envSimsamplhlinear)
+rm(envSimsamplh)
+rm(envSimsamplhlinear)
+gc()
+
+envSim$mbin <- ifelse(envSim$m0 < 16, 
+                          as.character(cut(envSim$m0[envSim$m0 < 16], 
+                                           breaks = c(0,2,5,16))), 
+                            as.character(cut_number(envSim$m0[envSim$m0 > 16], 3)))
+envSim$mbin <- factor(envSim$mbin, 
+                          levels = levels(as.factor(envSim$mbin))[c(1,2,5,6,4,3)],
+                      labels = c("[1,2]", levels(as.factor(envSim$mbin))[c(2)],
+                                 "(5,15]", levels(as.factor(envSim$mbin))[c(6,4,3)]))
+envSim$parity <- "itero"
+envSim$parity[envSim$p_a0 == 0] <- "semel"
+
+envSim$pjbin <- cut_number(envSim$p_j0, 3)
+
+envSim$pabin <- ifelse(envSim$p_a0 == 0, "[0,0]", 
+                       as.character(cut_number(envSim$p_a0[envSim$p_a0 >0], 3)))
+envSim$pabin <- factor(envSim$pabin,
+                       levels = levels(as.factor(envSim$pabin))[c(3,4,1,2)])
+envSim$agebin <- cut_number(envSim$age, 3)
+
+table(envSim$parity, envSim$mbin)
+
+colfunc<-colorRampPalette(c("red","gold","springgreen","royalblue"))
+
+```
+
+```{r}
+Time2Exta <- ggplot(envSim, aes(Year, colour = agebin,
+                                group = interaction(agebin, sig2e), 
+                                linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 1)+
+  facet_grid(StPopSz ~ parity + climate )+ 
+  scale_color_manual(expression(alpha), values = colfunc(3))+
+  scale_linetype(expression(sigma[E]^2))+
+  guides(color = guide_legend(order = 1))+
+  theme_bw()+
+  ylab("Extinction Risk")+
+  xlab("")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  ggtitle("a)") 
+
+
+Time2Extb <- ggplot(envSim, aes(Year, colour = pjbin, group = interaction(pjbin, sig2e),
+                                 linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 1)+
+  facet_grid(StPopSz ~ parity + climate )+ 
+  scale_color_manual(expression(P[j]), values = colfunc(3))+
+  scale_linetype(expression(sigma[E]^2))+
+  theme_bw()+
+  ylab("Extinction Risk")+
+  xlab("")+
+  ylab("")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  guides(color = guide_legend(order = 1))+
+  ggtitle("b)") 
+
+Time2Extc <- ggplot(envSim, aes(Year, colour = mbin, group = interaction(mbin, sig2e),
+                                 linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 0.75)+
+  facet_grid(StPopSz ~ parity + climate )+ 
+  scale_color_manual(expression(m), values = colfunc(6))+
+  scale_linetype(expression(sigma[E]^2))+
+  theme_bw()+
+  ylab("Extinction Risk")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  guides(color = guide_legend(order = 1))+
+  ggtitle("c)") 
+
+Time2Extd <- ggplot(envSim, aes(Year, colour = pabin, group = interaction(pabin, sig2e),
+                                 linetype = as.factor(sig2e)))+
+  stat_ecdf(size = 1)+
+  facet_grid(StPopSz ~ parity + climate )+ 
+  scale_color_manual(expression(P[a]), values = colfunc(6))+
+  scale_linetype(expression(sigma[E]^2))+
+  theme_bw()+
+  # xlab("")+
+  ylab("")+
+  coord_cartesian(xlim = c(0,93), ylim = c(0,1))+
+  guides(color = guide_legend(order = 1))+
+  ggtitle("d)") 
+ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/envTime2Ext", Sys.Date(),".jpg", sep=""),
+  (Time2Exta + Time2Extb)/(Time2Extc + Time2Extd),
+width=270, height=250,units='mm', dpi=300)
+```
+
+
+```{R}
+##################################
+
+ProbExt.env <- do.call(rbind, lapply(split(envSim, list(envSim$A_LH,
+                                                            envSim$StPopSz,
+                                                            envSim$sig2e,
+                                                            envSim$climate)),
+              function(x){
+                data.frame(StPopSz = x$StPopSz[1], sig2e = x$sig2e[1],
+                           PopSz = x$N[1], ProbExt100yrs = sum(x$Ext)/nrow(x),
+                           pa = x$p_a[1], pj = x$p_j[1], 
+                           age = x$age[1], m = x$m[1], 
+                           parity = x$parity[1],
+                           pabin = x$pabin[1], pjbin = x$pjbin[1], mbin = x$mbin[1],
+                           agebin = x$agebin[1],
+                           climate = x$climate[1],
+                           m0 = x$m0[1], pa0 = x$p_a0[1], pj0 = x$p_j0[1],
+                                ProbExt30yrs = sum(x$Ext[x$Year < 31])/nrow(x),
+                                ProbExt10yrs = sum(x$Ext[x$Year < 11])/nrow(x))
+                }))
+
+rm(envSim)
+gc()
+```
+
+```{r}
+
+EPa <- ggplot(ProbExt.env, aes(x = as.factor(sig2e),# interaction(sig2e,climate), 
+                                   ProbExt10yrs, color = as.factor(agebin)))+
+  geom_boxplot()+
+  theme_bw()+
+  scale_color_manual(expression(alpha), values = colfunc(3))+
+  facet_grid(climate ~ parity + StPopSz)+ 
+             # labeller = label_bquote(rows = sigma[D]^2~":"~.(sig2d)))+
+  # xlab(expression(sigma[E]^2 ~ "."~ D))+
+  xlab(expression(sigma[E]^2))+
+  ylab("EP (10 years)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("a)")
+
+
+EPb <- ggplot(ProbExt.env, aes(x = as.factor(sig2e),
+                                   ProbExt10yrs, colour = as.factor(pjbin)))+
+  geom_boxplot()+
+  theme_bw()+
+  scale_color_manual(expression(P[j]), values = colfunc(3))+
+  facet_grid(climate ~ parity + StPopSz)+ 
+  xlab(expression(sigma[E]^2))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ylab("EP (10 years)")+
+  ggtitle("b)")
+EPc <- ggplot(ProbExt.env, aes(x = as.factor(sig2e), 
+                                   ProbExt10yrs, colour = as.factor(mbin)))+
+  geom_boxplot()+
+  theme_bw()+
+  scale_color_manual(expression(m), values = colfunc(6))+
+  facet_grid(climate ~ parity + StPopSz)+ 
+  xlab(expression(sigma[E]^2))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ylab("EP (10 years)")+
+  ggtitle("c)")
+
+EPd <- ggplot(ProbExt.env, aes(x = as.factor(sig2e),
+                                   ProbExt10yrs, colour = as.factor(pabin)))+
+  geom_boxplot()+
+  scale_color_manual(expression(P[a]), values = colfunc(4))+
+  theme_bw()+
+  facet_grid(climate ~ parity + StPopSz)+ 
+  xlab(expression(sigma[E]^2))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ylab("EP (10 years)")+
+  ggtitle("c)")
+ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/ProbExt_env", Sys.Date(),".jpg", sep=""),
+  (EPa + EPb)/(EPc + EPd)+
+  plot_annotation(title = "Environmental Stochasticity",
+                  caption = expression("m: fecudnity;"~alpha*": age of reproductive maturity;"~P[j]*": juvenile survival;"~P[a]~": adult survival")),
+width=270, height=210,units='mm', dpi=300)
+
+
+```
+
+
+
+
+
+
+## levels of environmental stochasticity
+
+What would it look like if it were temperatures that had been scaled and centered?
+```{r}
+# Auto-regressive
+
+## alpha = 0, beta = 0.95, sig2 = 0.31
+alpha1 <- 0
+beta1 <- -0.08
+sig2e_drivers <- seq(0,20,length.out = 3)
+
+
+  # for(be in seq(-0.05, 1, by = 0.1)){
+    for(si in sig2e_drivers){
+      plot(envi.func.g(alpha = alpha1, beta = beta1, sig2 = si, Y = 100), type = "b",
+           main = paste("0", "0.95", si, sep = " - "))
+    }
+  # }
+
+
+    for(si in sig2e_drivers){
+      D <- envi.func.g(alpha = alpha1, beta = beta1, sig2 = si, Y = 100)
+      print(paste("(",trunc(min(D)),",", trunc(max(D)),")", si, sep = ""))
+    }
+
+D_3_auto <- data.frame(do.call(cbind,lapply(c(0.3,0.65,1), function(x) envi.func.g(alpha1,beta1,x,100))))
+
+D_3_auto$Year <- 1:100
+
+D_3_auto$X1scaled <- scale(D_3_auto$X1)
+D_3_auto$X2scaled <- scale(D_3_auto$X2)
+D_3_auto$X3scaled <- scale(D_3_auto$X3)
+
+attributes(D_3_auto$X1scaled)
+
+plot(D_3_auto$X3, type = "b")
+lines(D_3_auto$X2, col = "red", type = "b")
+lines(D_3_auto$X1, col = "blue", type = "b")
+## Use 0.3, 0.65, and 1
+
+plot(D_3_auto$X3scaled, type = "b")
+lines(D_3_auto$X2scaled, col = "red", type = "b")
+lines(D_3_auto$X1scaled, col = "blue", type = "b")
+## Use 0.3, 0.65, and 1
+
+
+```
+
+
+
+
+
+```{r}
+## model over time for each vital rate, take a model life history type and then go
+sens.sem <- lapply(1:nrow(semels), function(i){
+  popbio::sensitivity(MPM_age(pi_j = semels$P_j[i], pi_a = semels$P_a[i], m = semels$m[i], age = semels$age[i]))
+})
+
+semels <-  lh[lh$P_a == 0,]
+semels <- semels[!duplicated(semels),]
+MPM.semel <- lapply(1:nrow(semels), function(i){
+  MPM_age(pi_j = semels$P_j[i], pi_a = semels$P_a[i], m = semels$m[i], age = semels$age[i])
+})
+
+## Functions on vital rates
+```
+
+
+
+```{r}
+# Autoregressive
+# (sig2E <- runif(1, 0.001, 0.03)) # 0.025 or 0.0018 in Nitrogen in Gotelli and Ellison 2006
+alpha <- 0
+beta <- 0.8 # 0.03 #-0.2
+sig2es <- seq(0.3, 1, length.out = 3)
+
+## most sig2e
+D3 <- envi.func.g(alpha = 0, beta = beta, sig2 = sig2es[3], Y = 100)
+D2 <- envi.func.g(alpha = 0, beta = beta, sig2 = sig2es[2], Y = 100)
+D1 <- envi.func.g(alpha = 0, beta = beta, sig2 = sig2es[1], Y = 100)
+Dauto.plot <- data.frame(sig2e = rep(sig2es,each=100), 
+                           D = c(D1,D2,D3), 
+                           Year = rep(1:100, times = 3))
+
+
+autoexample <- ggplot(Dauto.plot, aes(Year, D))+
+  geom_line()+
+  geom_point(size = 4, colour="white")+
+  geom_point(size = 1.5, shape =16)+
+  theme_classic()+
+  theme(panel.background = element_rect(colour = "black"))+
+  facet_wrap(~sig2e, labeller = label_bquote(alpha~"=0,"~beta~"=0.8,"~sigma^2 ~"="~ .(sig2e)))+
+  ggtitle("Autoregressive")+
+  geom_hline(yintercept = 0, color = "grey")
+
+```
+
+
+```{r}
+# Linear
+# D <- 0.5 # rlnorm(1,5,0.05) )# environmental driver
+# (sig2E <- runif(1, 0.001, 0.03)) # 0.025 or 0.0018 in Nitrogen in Gotelli and Ellison 2006
+alpha <- 0
+beta <- 0.02
+
+D3 <- envi.linfunc.g(alpha = 0, beta = beta, sig2 = sig2es[3], Y = 100)
+D2 <- envi.linfunc.g(alpha = 0, beta = beta, sig2 = sig2es[2], Y = 100)
+D1 <- envi.linfunc.g(alpha = 0, beta = beta, sig2 = sig2es[1], Y = 100)
+Dlinear.plot <- data.frame(sig2e = rep(sig2es,each=100), 
+                           D = c(D1,D2,D3), 
+                           Year = rep(1:100, times = 3))
+ 
+linearexample <- ggplot(Dlinear.plot, aes(Year, D))+ 
+  geom_line()+
+  geom_point(size = 4, colour="white")+
+  geom_point(size = 1.5, shape =16)+
+  theme_classic()+
+  theme(panel.background = element_rect(colour = "black"))+
+  facet_wrap(~sig2e, labeller = label_bquote(alpha~"=0,"~beta~"=0.02,"~sigma^2 ~"="~ .(sig2e)))+
+  ggtitle("Linear")+
+  geom_hline(yintercept = 0, color = "grey")
+```
+
+(4) D[t]=f(t)
+(5) D[t]=alpha+beta*t
+(6) D[t]=alpha+beta*D[t-1]
+(9) P[ij]=f(D[t])=={f(g(t))}; g(t)= 5 or 6
+```{r}
+## Linking function from climate driver D to survival and to fecundity P[x]*m
+# Survival linking function is a Logistic curve bounded by reasonable upper and lower survival rates
+D_link <- seq(-4, 6, length.out = 100)
+beta <- 1
+d <- 0.9  # upper asymptote: from the max beta distribution 
+c <- 0.1 # lower asymptote: from the min beta distribution
+e <-  0   # X for response half way between c and d
+
+## logistic curve: 
+linksurvJ <- c + (d-c)/(1 + exp(beta*(D_link - e)))
+
+survDF <- data.frame(D_link,linksurvJ)
+survLinkplot <- ggplot(survDF, aes(D_link, linksurvJ))+
+  geom_line()+
+  theme_classic()+
+  ggtitle(expression("Survival "~P[j]))+
+  xlab("D")+
+  ylab(expression(P[j]))
+
+
+```
+
+
+Linking function for fecundity
+```{r}
+alpha <- 1.15 ## this is the starting fertility
+beta <- -1
+
+(HPDI <- qnorm(0.975, alpha, 1))
+
+## fert can't drop below zero but can have total failure, can't go above 95%HDPI
+linkfert <- ifelse(alpha+D_link*beta<0,0,ifelse(alpha+D_link*beta> HPDI, HPDI,
+                                                alpha+D_link*beta))
+
+fertDF <- data.frame(D_link, linkfert)
+fertPlot <- ggplot(fertDF, aes(D_link, linkfert))+
+  geom_line()+
+  theme_classic()+
+  ggtitle("Fertility of stage x")+
+  xlab("D")+
+  ylab(expression(f[x]))
+
+plot(D_link, linkfert, type = "l", ylab = expression(f[x]),xlab="D")
+mtext("b) Fertility of stage x", side = 3, line=0, adj=0)
+
+```
+
+
+```{r}
+
+ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/EnvironDriverLinks", Sys.Date(),".jpg", sep=""),
+       
+ linearexample/
+   autoexample/
+   (survLinkplot + fertPlot )      
+,
+width=250, height=300,units='mm', dpi=300)
+```
+
+
+
+
+AIC
+```{r}
+
+envSimAll$envtype <- "linear"
+envSimAll_auto$envtype <- "auto"
+Time2Ext.env <- rbind(envSimAll,envSimAll_auto)
+save(Time2Ext.env, file = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/Time2Ext.env", Sys.Date(),".Rdata", sep = ""))
+
+
+lm1 <- glm(Year ~ age + m + p_a + p_j + envtype, family = gaussian(link=log), data = Time2Ext.env)
+lm2 <- glm(Year ~ (age + m + p_a + p_j + envtype)^2, family = gaussian(link=log), data = Time2Ext.env)
+lm3 <- glm(Year ~ age, family = gaussian(link=log), data = Time2Ext.env)
+lm13 <- glm(Year ~ age + envtype, family = gaussian(link=log), data = Time2Ext.env)
+lm4 <- glm(Year ~ m, family = gaussian(link=log), data = Time2Ext.env)
+lm14 <- glm(Year ~ m + envtype, family = gaussian(link=log), data = Time2Ext.env)
+lm5 <- glm(Year ~ p_a, family = gaussian(link=log), data = Time2Ext.env)
+lm15 <- glm(Year ~ p_a + envtype, family = gaussian(link=log), data = Time2Ext.env)
+lm6 <- glm(Year ~ p_j, family = gaussian(link=log), data = Time2Ext.env)
+lm16 <- glm(Year ~ p_j + envtype, family = gaussian(link=log), data = Time2Ext.env)
+lm7 <- glm(Year ~ age*p_a, family = gaussian(link=log), data = Time2Ext.env)
+lm8 <- glm(Year ~ p_a * p_j, family = gaussian(link=log), data = Time2Ext.env)
+
+lm9 <- glm(Year ~ (age + m + p_a)^2, family = gaussian(link=log), data = Time2Ext.env)
+lm10 <- glm(Year ~ (age + p_a + p_j)^2, family = gaussian(link=log), data = Time2Ext.env)
+lm11 <- glm(Year ~ (age + m + p_j)^2, family = gaussian(link=log), data = Time2Ext.env)
+
+
+lm.list <- list(lm1,lm2,lm3,lm4,lm5,lm6,lm7,lm8,lm9, lm10, lm11, lm13, lm14, lm15, lm16)
+lm.names <- as.character(unlist(lapply(lm.list,formula)))
+(lm.results <- aictab(lm.list, modnames=lm.names))
+#evidence ratio 
+for(i in 2:length(lm.list)){
+  print(exp(0.5*lm.results$Delta_AICc[i]))
+}
+```
+
+
+
+Kendall 1998 beta-binomial for environmental stochasticity 
+```{r}
+## Annuals
+annuals <- simLH_sig2E[simLH_sig2E$age == 1 & simLH_sig2E$surv_a == 0,]
+annuals <- annuals[complete.cases(annuals),]
+semel <- simLH_sig2E[simLH_sig2E$surv_a == 0,]
+itero <- simLH_sig2E[simLH_sig2E$surv_a > 0,]
+
+
+mAnnual <- map(
+  alist(
+    m_Juv ~ dbetabinom(N_Juv, p, exp(log_theta)),
+    logit(p) <- a,
+    a ~ dnorm(0,10),
+    log_theta ~ dnorm(1,10)
+  ), data = annuals[annuals$type == unique(annuals$type)[1] & annuals$Nrep == 1
+                    & annuals$sig2E == 0& annuals$N_Juv > 0,]
+)
+precis(mAnnual)
+(mu <- logit2prob(coef(mAnnual)['a']))
+(sig2_mu <- (mukappa2sigma(mu, exp(coef(mAnnual)['log_theta'])))^2 ) 
+
+#############################################################
+
+mAnnual <- map(
+  alist(
+    m_Juv ~ dbetabinom(N_Juv, p, exp(log_theta)),
+    logit(p) <- a,
+    a ~ dnorm(0,10),
+    log_theta ~ dnorm(1,10)
+  ), data = annuals[annuals$type == unique(annuals$type)[1] & annuals$Nrep == 1
+                    & annuals$sig2E == 0.04& annuals$N_Juv > 0,]
+)
+precis(mAnnual)
+(mu <- logit2prob(coef(mAnnual)['a']))
+(sig2_mu <- (mukappa2sigma(mu, exp(coef(mAnnual)['log_theta'])))^2 ) 
+
+############################################################
+
+mAnnual <- map(
+  alist(
+    m_Juv ~ dbetabinom(N_Juv, p, exp(log_theta)),
+    logit(p) <- a,
+    a ~ dnorm(0,10),
+    log_theta ~ dnorm(1,10)
+  ), data = annuals[annuals$type == unique(annuals$type)[1] & annuals$Nrep == 1
+                    & annuals$sig2E == 0.08 & annuals$N_Juv > 0,]
+)
+precis(mAnnual)
+(mu <- logit2prob(coef(mAnnual)['a']))
+(sig2_mu <- (mukappa2sigma(mu, exp(coef(mAnnual)['log_theta'])))^2 ) 
+
+
+
+
+unique(annuals$surv_j[annuals$type == unique(annuals$type)[1] & annuals$Nrep == 1
+                    & annuals$sig2E == 0])
+
+ggplot(annuals[annuals$type == unique(annuals$type)[1]
+                    & annuals$sig2E == 0,], aes(year, N, colour = as.factor(Nrep)))+
+  geom_line()+
+  theme_bw()+
+  scale_colour_discrete(guide = 'none')
+
+ggplot(annuals[annuals$type == unique(annuals$type)[1] 
+                    & annuals$sig2E == 0.04,], aes(year, N, colour = as.factor(Nrep)))+
+  geom_line()+
+  theme_bw()+
+  scale_colour_discrete(guide = 'none')
+
+ggplot(annuals[annuals$type == unique(annuals$type)[1] 
+                    & annuals$sig2E == 0.08,], aes(year, N, colour = as.factor(Nrep)))+
+  geom_line()+
+  theme_bw()+
+  scale_colour_discrete(guide = 'none')
+
+ggplot(annuals[annuals$type==unique(annuals$type)[1],], aes(year, N, colour = as.factor(Nrep)))+
+  geom_line()+
+  theme_bw()+
+  facet_wrap(~sig2E, ncol = 1)+
+  scale_colour_discrete(guide = 'none')
+  
+
+```

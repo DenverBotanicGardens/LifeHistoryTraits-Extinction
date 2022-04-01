@@ -1,0 +1,310 @@
+---
+title: "Simulate Life histories"
+output: html_document
+---
+
+MethodofMoments_otherfuntions for functions
+
+```{r}
+
+
+## Use McElreath to make stan easier 
+# library(rethinking)
+
+# library(rstan)
+# options(mc.cores = parallel::detectCores())
+# rstan_options(auto_write = TRUE)
+# library(parallel)
+# library(cmdstanr)
+# set_cmdstan_path("C:/Users/deprengm/OneDrive - Denver Botanic Gardens/Documents/cmdstan-2.28.2") 
+# check_cmdstan_toolchain() # fix = TRUE if not working
+# options("cmdstanr_verbose" = TRUE)
+
+
+```
+
+```{r, eval=FALSE}
+# save(lmbds.per, file = "C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/perennialssallsig21e-052022-02-19_lambda.Rdata")
+# save(lmbds.sem, file = "C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/semelsssallsig21e-052022-02-19_lambda.Rdata")
+# save(PopDyn.perennials, file = "C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/perennialssallsig21e-052022-02-19_popdyn.Rdata")
+# save(PopDyn.semel, file = "C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/semelsallsig21e-052022-02-19_popdyn.Rdata")
+
+
+```
+
+
+# Range of life historites   
+```{r}
+## Make the global survivals different from the local environments in functions of p_a and p_j
+age <- 1:15 # c(1:4, 5, 10, 15)# c(1,5,10,15) # age of sexual maturity
+P_a <- seq(0,0.995, by=0.05)  # survival adult
+m <- c(1:9, seq(10,49, by = 5), seq(50, 500, by = 50)) # fecundity
+## fertility, f_x = p_x * m
+
+# possible life histories
+lh <- expand.grid(list(age,P_a,m))
+names(lh) <- c("age","P_a","m") #5700
+
+# calculate juvenile survival from Jeppsson and Forslund 2012
+lh$P_j <- unlist(lapply(1:nrow(lh), function(i){
+  p_j(m=lh$m[i], p_a = lh$P_a[i], age = lh$age[i])
+}))
+
+# Only select those with juvenile survival less than 1
+lh <- lh[lh$P_j < 1 & lh$P_j > 0,] # 5685
+lh <- lh[order(lh$age, lh$P_a, lh$m),] # same sort order as Jeppson Forslund 2012 Appendix B
+
+# Create age based (Leslie) matrices for sets of vital rates where growth rate is stable 
+MPMs <- lapply(1:nrow(lh), function(i) MPM_age(age = lh$age[i],pi_j = lh$P_j[i], pi_a = lh$P_a[i],m = lh$m[i]) ) 
+lbd <- lapply(MPMs, function(x) lambda(x))
+lh$lambda <- unlist(lbd)
+hist(lh$lambda, breaks=100)
+# Only keep ones where can get lambda == 1
+lh <- lh[lh$lambda == 1,] # 79
+lh$type = paste("age",lh$age, "_pA", round(lh$P_a,1), "_m", lh$m, "_pJ", round(lh$P_j,2), sep="")
+
+rm(MPMs)
+gc()
+
+save(lh, file = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/lifehistories", Sys.Date(),".Rdata", sep = ""))
+
+```
+
+
+```{r}
+colfunc<-colorRampPalette(c("red","yellow","springgreen","royalblue"))
+
+semels <- lh[lh$P_a == 0,]
+
+semel1 <- ggplot(semels, aes(m, P_j, group = age, colour = as.factor(age)))+
+        geom_line()+
+        geom_point(size = 4, colour="white")+
+        geom_point(size = 1, shape =1)+
+         annotate("text", x = aggregate(m~age, semels, max)$m+30,
+                  y = aggregate(P_j~age, semels, min)$P_j+0.005,
+                  label = paste("alpha == ",semels$age[semels$P_j %in% aggregate(P_j~age, semels, min)$P_j&
+                                                      semels$m %in%  aggregate(m~age, semels, max)$m] ), parse = TRUE)+
+        scale_colour_manual(guide = "none",values = colfunc(15))+
+        theme_classic()+
+        theme(panel.background = element_rect(colour = "black"))+
+        xlab(expression(m))+
+        ylab(expression(P[j]))+
+  ggtitle("a)")
+
+perennials <- lh[ lh$P_a > 0,]
+
+
+peren1 <-  ggplot(perennials, aes(P_a, P_j, group = age, colour = as.factor(m)))+
+         geom_line()+
+         geom_point(size = 4, colour="white")+
+         geom_point(size = 1, shape =1)+
+         theme_classic()+
+         theme(panel.background = element_rect(colour = "black"))+
+         annotate("text", x = aggregate(P_a~age, perennials, max)$P_a+0.01,
+                  y = aggregate(P_j~age, perennials, min)$P_j + 0.005,
+                  hjust = 0,
+                  #perennials$P_j[!duplicated(perennials$age)]+0.01,
+                  label = paste("alpha ==", perennials$age[perennials$P_j %in% 
+                                                             aggregate(P_j~age, perennials,min)$P_j &
+                                                 perennials$P_a %in% aggregate(P_a~age, perennials, max)$P_a]),
+                  parse = TRUE)+
+         xlab(expression(P[a]))+
+         ylab(expression(P[j]))+
+  coord_cartesian(xlim = c(0,1))+
+    scale_colour_manual(guide="none", values = colfunc(10))+
+  ggtitle("b)")
+
+peren2 <- ggplot(perennials, aes(m,P_j,  colour = P_a))+
+            geom_point()+
+            scale_colour_steps(expression(P[a]), low = "red", high = "skyblue")+
+            xlab(expression(m~"="~alpha))+
+            ylab(expression(P[j]))+
+            theme_bw()+
+  ggtitle("c)")
+
+ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/Demo_semelperennials",
+                        Sys.Date(),"_lifehistories.jpg", sep = ""),
+       
+(semel1 + peren1)/(peren2 + plot_spacer())       
+,
+width=250, height=175,units='mm', dpi=300)
+
+
+
+```
+
+
+
+#####################################################################################
+```{r}
+
+
+mAnnual <- ulam(
+  alist(
+    m_Juv ~ dbetabinom(N_Juv, p, theta),
+    logit(p) <- a,  # logit(p) <- a[type] + b1*age + b2*fecundity + b3*surv_j
+    a ~ dnorm(0,10),
+    theta ~ dgamma(0.001,0.001)
+  ), data = annuals[annuals$type == unique(annuals$type)[1] & annuals$Nrep == 1
+                    & annuals$sig2E == 0.08 & annuals$N_Juv > 0,c("N_Juv", "m_Juv")], chains = 3
+)
+
+stancode(mAnnual)
+```
+
+
+## brms  
+```{r}
+fit1 <- brm(m_Juv|trials(N_Juv) ~ year + (1|Nrep),
+            data = annuals[annuals$type == unique(annuals$type)[1] # & annuals$Nrep == 1
+                    & annuals$sig2E == 0.08 & annuals$N_Juv > 0,c("N_Juv", "m_Juv", "year","Nrep")],
+            family = binomial())
+summary(fit1)
+```
+
+## brms define beta-binomal   
+```{r}
+beta_binomial2 <- custom_family(
+  "beta_binomial2", dpars = c("mu", "phi"),
+  links = c("logit", "log"), lb = c(NA, 0),
+  type = "int", vars = "vint1[n]"
+)
+
+stan_funs <- "
+  real beta_binomial2_lpmf(int y, real mu, real phi, int T) {
+    return beta_binomial_lpmf(y | T, mu * phi, (1 - mu) * phi);
+  }
+  int beta_binomial2_rng(real mu, real phi, int T) {
+    return beta_binomial_rng(T, mu * phi, (1 - mu) * phi);
+  }"
+
+stanvars <- stanvar(scode = stan_funs, block = "functions")
+```
+overdispersion parameter phi   
+
+```{r}
+fit2 <- brm(m_Juv|trials(N_Juv) ~ year + (1|Nrep),
+            data = annuals[annuals$type == unique(annuals$type)[1] # & annuals$Nrep == 1
+                    & annuals$sig2E == 0.08 & annuals$N_Juv > 0,c("N_Juv", "m_Juv", "year","Nrep")],
+            family = beta_binomial2)
+summary(fit2)
+```
+
+
+
+```{r}
+maxYearSurv <- aggregate(year ~ Nrep + age + survA + survJ + fecundity, data = simLH_sig2E, max)
+
+ggplot(maxYearSurv, aes(survA, year, colour = fecundity))+
+  geom_point()+
+  facet_wrap(~age)+
+  theme_bw()
+
+# There are way more ways to be semelparous
+hist(simLH_sig2E$surv_a[simLH_sig2E$surv_a>0])
+
+```
+
+
+# Kendall 1998 to measure environemntal stochasticity 
+```{r}
+
+curve(dbinom(5, 10, x), xlab = "Survival probability", ylab = "PDF", ylim = c(0,.5), lwd = 5)
+for(i in 1:9) curve(dbinom(i,10, x), col = i, add = TRUE)
+## Demographic variance as sig^2 of binomial
+pi <- seq(0.05,0.95, by = 0.05)
+plot(pi, pi*(1-pi), type = "b", xlab = expression(pi), ylab = expression(sigma^2~(pi)))
+
+ggplot(simLH_sig2E, aes(sig2E, sig2Dts, ))
+
+```
+
+
+Model and produce posteriors
+```{r}
+# Juveniles 
+
+
+
+mJuvannual1 <- map(
+  alist(
+    
+  )
+)
+
+```
+
+
+## Long-lived perennial 
+adult survival will be greater  
+Fox and Kendall 2002
+Total variance in number of survivors in populaiton of size N = Var(S)    
+$Var(S) = N( V_D(E[p])-Var(p) ) $   
+```{r}
+N <- rpois(100, 100) 
+ab <- musig2ab(0.5,0.04)
+pi <- rbeta(100,ab[1], ab[2])
+m <- rbinom(100, N, pi)
+
+slowpere <- data.frame(N,m,pi)
+
+slowpere$Picheck <- slowpere$N*slowpere$pi
+
+
+```
+
+
+## Jeppsson and Forslund 2012 Appendix B
+Create a matrix that is stable ($ln\lambda = 0$) for a range from semelparous annual to iteroparous perennial and then simulate environmental stochasticity ($\sigma^2 = (0.01,0.04,0.08)$) and compare the magnitude of environmental to demographic stochasticity over time for a finite population
+```{r}
+
+
+## An annual, semelparous; from Appendix B of Jeppsson and Forslund 2012
+age <- 1
+pi_j <- 0.03333333
+pi_a <- 0
+m <- 30
+sig2E <- 0.04
+Y <- 100 # number of years to project
+
+simAnnual <- simulation(age=age, surv_j = pi_j, surv_a = pi_a, m = m,
+                        sig2E = sig2E, Y = Y, nreps=100, type = "Annual")
+
+ggplot(simAnnual, aes(yr, N, group = as.factor(rep)))+
+  geom_line()+
+  theme_bw()
+
+ggplot(simAnnual, aes(sig2E_j, sig2D_j))+
+  geom_point()
+
+```
+
+
+## Jonsson 2021 complex vs. simlple life histories (animals)
+```{r}
+f.fecund <- function(l1, surv.1, growth, surv.2){
+  (l1^2 + (surv.1*growth - surv.1-surv.2)*l1 + surv.1*surv.2*(1-growth) )/(surv.1*growth)
+}
+
+
+f.fecund(1,lh$P_j[1], 1, lh$P_a[1])
+lh[1,]
+
+foo <- 20
+(growth <- 1/lh$age[foo])
+f.fecund(1,lh$P_j[foo], growth, lh$P_a[foo])
+lh[foo,]
+
+
+```
+
+
+Heterogeneity
+```{r}
+
+## instead of binomial, do bernoulli for each individiual draws from a distribution of survival rates, not just one in a binomial for whole group!
+
+
+
+```
+

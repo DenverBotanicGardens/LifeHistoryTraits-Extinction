@@ -1,0 +1,456 @@
+---
+title: "Moment matching and other functions"
+output: html_document
+---
+
+Functions for 
+   1. 2022_SimulateLifeHistories.Rmd
+   2. 2022_SimulateDemoStoch.Rmd
+   3. 2022_SimulateEnvionStoch.Rmd
+   4. 2022_SimulateEnvDemoStoch.Rmd
+```{r}
+
+rm(list=ls())
+
+library(patchwork)
+library(popbio)
+# require(AICcmodavg)
+
+library(ggplot2)
+library(ggExtra)
+
+library(parallel)
+library(foreach)
+library(doParallel)
+
+# Output tables 
+library(tidyr)
+# library(sjPlot)
+
+gc()
+```
+
+Moment matching beta distribution
+```{r}
+
+rm(list=ls())
+
+musig2ab <- function(mu, sig){
+  a <- (mu*mu - mu^3 - sig*mu^2)/(sig^2)
+  b <- (mu - 2*mu^2 + mu^3 - sig^2 + mu*sig^2)/(sig^2)
+  c(a,b)
+}
+
+
+#Jeppsson and Forslund 2012
+MPM_age <- function(pi_j, pi_a, m, age){
+  A_surv <- matrix(rep(0,age*age), nrow = age)
+  diag(A_surv) <- pi_j 
+  # Add adult survival
+  A_surv2 <- cbind(A_surv, c(rep(0,age-1),pi_a))
+  # add fertility and fecundity
+  A <- rbind(c(rep(0,age-1),pi_j*m,pi_a*m), A_surv2)
+  A 
+}
+
+# solve characteristic equation for lambda = 1 for juvenile survival
+p_j <- function(m, p_a, age){
+  (m + ((p_a*age)/(1-p_a)))^(-1/age)
+}
+
+
+## Demographic variances of population growth and [t]rait [s]pecific contributions to \sigma_d^2 Trait Specific
+# Jeppsson and Forslund 2012 equation 5 
+sig2Dts <- function(p_j, m, p_a, age){
+  A <- MPM_age(pi_j = p_j, pi_a = p_a, m = m, age = age)
+  AI <- A[-1,]
+  AI[AI>0] <- 1
+  s <- popbio::sensitivity(A)
+  ## Variance of Poisson == mean; variance of binomial is pi(1-pi)
+  var_s <- A[-1,]*(AI-A[-1,]) # already sig^2
+  ## F, fertility is survival * m, but what is the variance of survival*fecundity, m?  
+  var_f <- A[1,]#c(rep(0,age-1),rep(m,2))  
+  Asig2 <- rbind(var_f,var_s)
+  var.sen <- s^2*Asig2 
+  w <- stable.stage(A)
+  sum(apply(var.sen, 1, function(x) x/w)) # row by row
+}
+
+sig2Dts.A <- function(MPM){
+  A <- MPM
+  AI <- A[-1,]
+  AI[AI>0] <- 1
+  s <- popbio::sensitivity(A)
+  ## Variance of Poisson == mean; variance of binomial is pi(1-pi)
+  var_s <- A[-1,]*(AI-A[-1,]) # already sig^2
+  ## F, fertility is survival * m, but what is the variance of survival*fecundity, m?  
+  var_f <- A[1,]#c(rep(0,age-1),rep(m,2))  
+  Asig2 <- rbind(var_f,var_s)
+  var.sen <- s^2*Asig2 
+  w <- stable.stage(A)
+  sum(apply(var.sen, 1, function(x) x/w)) # row by row
+}
+
+
+demoenvStoch <- function(rbar, N, sigE, sigD){
+  # Stochastic population growth rate
+  loglamS <- rbar - (sigE/2) - (sigD/(2*N))
+  loglamS
+}
+
+
+# Functions to deal with beta binomial
+## back transform logit
+logit2prob <- function(logit){
+  odds <- exp(logit)
+  prob <- odds / (1 + odds)
+  return(prob)
+}
+
+## get a and b from the mean, p_bar, and kappa
+betaABfromMeanKappa <- function(mean, kappa) {
+  if (mean <= 0 | mean >= 1) stop("must have 0 < mean < 1")
+  if (kappa <= 0) stop("kappa must be > 0")
+  a <- mean * kappa
+  b <- (1.0 - mean) * kappa
+  return(list(a = a, b = b))
+}
+
+mukappa2sigma <- function(mu, kappa){
+  sqrt(mu*(1-mu)/(kappa+1))
+}
+
+
+### Simulate demographic stochasticity alone
+#########################################################################
+# create sampsz number of random matrices
+## Only vary juvenile survival and fecundity
+MPM_stoch <- function(sampsz, age1, p_a, m1, p_j, sig2D){
+  lapply(1:sampsz, function(i){
+    ab_j <- musig2ab(p_j, sig2D)
+    # Too much variability and can get negatives, cannot estimate beta parameters 
+    if(any(c(ab_j)<0)){
+      ## just truncate a normal distribution?? If that tight at one end, will approximate normal anyway??
+      pjnorm <- rnorm(1, p_j, sig2D)
+      surv_j <- ifelse(pjnorm>0, pjnorm, 1e-4)
+      } else {
+        surv_j <- rbeta(1, ab_j[1], ab_j[2])
+      } # end if beta parameters are negative
+    m.now <- rpois(1, m1)
+    MPM_age(pi_j = surv_j, pi_a = p_a, m = m.now, age = age1)
+  })
+}
+
+
+## Takes a list of Mx, a starting population size, the amount of demographic stochasticity associated with the list of Mx, and the original vital rates before demographic stochasticity added
+ER <- function(MPMs, Y, StPopSz, sig2D, p_a, p_j, m1, age1){
+  lapply(1:length(MPMs), function(Mi){
+  # Start stable size 
+  w <- popbio::stable.stage(MPMs[[Mi]])
+  N <- list(matrix(round(StPopSz*w,0), nrow = dim(MPMs[[Mi]])[1]))
+  yr <- c(1)
+  Ext01 <- 0 
+  
+  for(i in 2:Y){
+    yr[i] <- i
+    # N[[i]] <- round( M %*% N[[i-1]], 0)
+    N[[i]] <- round( MPMs[[Mi]] %*% N[[i-1]], 0)
+    if(sum(N[[i]]) < 5){
+      Ext01 <- 1
+      break
+      } ## 10% of starting (0.1*StPopSz)
+  }
+  
+  data.frame(Year = yr, StPopSz = StPopSz, 
+             PopSz = do.call(rbind, lapply(N, function(x) sum(x))), 
+             Lambda = lambda(MPMs[[Mi]]), sig2D = sig2D, age = age1,
+             m = m1, p_a = p_a, p_j = p_j, 
+             Mx_i = Mi, ## The A_LH_i 
+             Ext = Ext01)
+  })
+}
+
+
+simulateDemoTime2Ext <- function(age, p_a, m, p_j, sampsz, sig2D, Y, StPopSz){
+  MPMs <- MPM_stoch(age1 = age, p_a = p_a, p_j = p_j, m1 = m, sampsz = sampsz)
+  PopDyn <- ER(MPMs = MPMs, Y = Y, StPopSz = StPopSz, sig2D = sig2D, p_a = p_a, p_j = p_j, age1 = age, m1 = m)
+  Time2Ext <- do.call(rbind, lapply(PopDyn, function(er){
+    er[nrow(er),]
+  }))
+ return(list(MPMs, PopDyn, Time2Ext)) 
+}
+
+#########################################################################
+#Environmental stochasticity
+
+
+## Control the environment 
+# Linear environmental driver with stochasticity
+envi.linfunc.g <- function(Y,alpha,beta,sig2){
+  unlist(lapply(1:Y, function(t) alpha + beta*t + rnorm(1, 0, sig2)))
+}
+
+# Autoregressive environmental driver with stochasticity
+envi.func.g <- function(alpha,beta,sig2,Y){
+    # unlist(lapply(1:Y, function(t) alpha + beta*t + rnorm(1, 0, sig2)))
+  D <- c(rnorm(1,alpha,sig2))
+  for(t in 2:Y){ 
+    D[t] <- alpha + beta*D[t-1] + rnorm(1, 0, sig2)
+  }
+  D
+}
+
+# summary(lm(seq(0.1,10, length.out = 100)~seq(15,1,length.out = 100))) # Beta_1 = -0.71
+# plot(seq(15,1,length.out = 100),seq(0.1,10, length.out = 100) )
+## The variation around survival given age
+demobuffer <- function(M){
+  age <-  dim(M)[1]-1
+  10.71 + age* -0.707
+}
+
+
+## Link of driver to survival and fecundity
+## survival for .j.uveniles, .M.atrix, and variance == sig2
+survlinkparams <- function(M){
+  sig2 <- demobuffer(M)
+  surv <- M[2,1]
+  absurv <- musig2ab(surv, sig2)
+  c(surv,absurv)
+}
+
+
+
+
+## surv is [1]      
+## absurv will be [2:3] from survlinkparams, will then be alpha = 1, beta = 2 for shape of beta dist
+## Rodriguez-Caro et al 2021: Demographically labile species (annual plants) more variable with environment, long-lived species demographically buffered constrain temporal variation in vital rates that most affect population growth rate
+  ## Find bounds, central tendency, and spread of survival link to environment
+  ## betaS survival ??slope at inflection??
+  ## ti = time step index
+env2survlink <- function(M,surv,absurv,betaS,D_t,e){
+  sig2demobuff <- demobuffer(M) 
+  if(any(absurv < 0)){
+    # normal around the survival but not less than zero and not more than 1
+    cd <- qnorm(c(0.025, 0.975), mean = surv, sd = sqrt(sig2demobuff))  ## WAS sig2. 0.01 in Kendall 1998 example
+    cd <- c(ifelse(cd[1] < 0, 0, cd[1]), ifelse(cd[2] > 1, 1, cd[2]) )
+  } else {
+    cd <- qbeta(c(0.025, 0.975), shape1 = absurv[1], shape2 = absurv[2])
+  }
+  cd[1] + (cd[2]-cd[1])/(1 + exp(betaS*(D_t - e)))
+}
+
+
+## test
+# cd <- c(1e-4, 0.2)
+# betaS <- -1
+# D <- envi.linfunc.g(Y = 100, alpha = 0,beta = 0.02, sig2 = 0.3)
+# survab.J <- survlinkparams(MPM_age(lh$P_j[1], lh$P_a[1], lh$m[1], lh$age[1]), sig2 = 0.3)
+# surv.env <- env2survlink(surv = survab.J[1],
+#                          absurv = survab.J[2:3],
+#                          betaS = -1, 1:100, D, )
+# rm(cd)
+# rm(betaS)
+# rm(D)
+# rm(survab.J)
+# rm(surv.env)
+      # Initialize the stable matrix model for the life history
+      # e <- 0 # this is the starting point for projecting D
+      # betaS <- 1
+      # betaF <- -1
+      # sig2 <- 0.1
+
+
+## Test
+# M <- MPM_age(pi_j = lh$P_j[100], pi_a = lh$P_a[100], m = lh$m[100], age = lh$age[100])
+# D <- D[1]
+# betaF <- -1
+
+
+
+env2fertlink <- function(M, betaF,D){
+  sd.age <- demobuffer(M)
+  ## To assign to Mx[[1]][1,(dim(M)[1]-1):(dim(M)[1])]
+  ## fertility f = P_x * m; fertility cannot drop below 0
+  fert <- M[1,(dim(M)[1]-1):(dim(M)[1])]
+  # Age of sexual maturity fertility (juvenile) 
+  Fj <- fert[1] + D*betaF
+  Fa <- fert[2] + D*betaF
+  if(Fj < 0){
+    Fj <- 0
+  } else {
+    if(Fj > qnorm(c(0.975), mean = Fj, sd = sqrt(sd.age))) Fj <- qnorm(c(0.975), mean = Fj, sd = sqrt(sd.age))
+  }
+  # Adult
+  if(Fa < 0){
+    Fa <- 0
+  } else {
+    if(Fa > qnorm(c(0.975), mean = Fa, sd = sqrt(sd.age))) Fa <- qnorm(c(0.975), mean = Fa, sd = sqrt(sd.age))
+    }
+  c(Fj, Fa)
+}
+
+
+
+## Test from EnvDemo
+# M <- MPMs_all[[105]]
+# betaS <- 1 ## survival of juveniles slope around inflection (strength of cliamte impact)
+# betaF = -1
+# StPopSz <- 50
+# ## The parameters for the climate
+# beta0climate <- 0 # was alpha for climate, 0
+# beta1climate <-0.02 # was just beta, 0.02 for linear, 0.8 for auto
+# envsto <- "li"
+# sig2 <- 0.01
+
+####################################################################
+# Environmental stochastic projection
+# alpha and beta are for environmental stochasticity
+# betaS and betaF are for respective linking functions (e is )
+simEnv <- function(MPMs, nreps, Y, StPopSz, e=0, betaS, betaF, beta0climate = 0, beta1climate, sig2,
+                   envsto = c("linear","autocoreelated")){
+  simEnv.out <- do.call(rbind,lapply(1:nreps, function(sim){
+    ## Simulate a new environment 
+    if(grepl(envsto, "linear"))  D <- envi.linfunc.g(Y, alpha = beta0climate, 
+                                                     beta = beta1climate, sig2 = sig2)
+    if(grepl(envsto, "autocorrelated")) D <- envi.func.g(alpha = beta0climate, 
+                                                         beta = beta1climate, sig2 = sig2, Y=Y)
+    envir.stoch <- lapply(MPMs, function(M){
+      # Work through the list of matrices for the same environment
+      yr <- c(1)
+      w <- popbio::stable.stage(M)
+      N <- list(matrix(round(StPopSz*w,0)))
+      Mx <- lapply(1:Y, function(i) M) 
+      # how much the environmental driver can impact juvenile survival
+      surv.ab.juv <- survlinkparams(M = M)
+      Ext01 <- 0
+          
+      for(ti in 2:Y){
+        ## Survival juveniles
+        survJ <- env2survlink(M = M, surv = surv.ab.juv[1], absurv = surv.ab.juv[2:3],
+                              betaS = betaS, ## slope at inflection
+                              D_t=D[ti], e=e)
+        
+        ## Juvenile survival diagonal only works if dim(Mx) > 1
+        if(dim(M)[1]==2){
+            Mx[[ti]][-1,-dim(M)[2]] <- survJ
+          } else {
+            diag(Mx[[ti]][-1,-dim(M)[2] ]) <- survJ
+          }
+
+        ## fertility f = P_x * m; fertility cannot drop below 0 or above 95%HDPI
+        Mx[[ti]][1,(dim(M)[1]-1):(dim(M)[1])] <- env2fertlink(M, betaF = betaF,
+                                                              D=D[ti])
+          
+        yr[ti] <- ti
+        N[[ti]] <- round(Mx[[ti]] %*% N[[ti-1]],0)
+        
+        if(sum(N[[ti]]) < 5){ 
+          Ext01 <- 1
+          break
+          }
+      }
+  data.frame(Year = yr, N = do.call(rbind, lapply(N, function(x) sum(x))),
+             Lambda = do.call(rbind, lapply(Mx[1:length(N)], function(x) lambda(x))), 
+             D = D[1:length(N)], age = dim(M)[1]-1, 
+             m = do.call(rbind, lapply(Mx[1:length(N)], function(M) M[1,dim(M)[1]-1]/M[2,1])), 
+             m0 = M[1,dim(M)[1]-1]/M[2,1],
+             p_a = do.call(rbind, lapply(Mx[1:length(N)], function(M) M[dim(M)[1],dim(M)[1]])), 
+             p_a0 =  M[dim(M)[1],dim(M)[1]],
+             p_j = do.call(rbind, lapply(Mx[1:length(N)], function(M) M[2,1])),
+             p_j0 = M[2,1],
+             sim = sim, StPopSz = StPopSz, Ext = Ext01,
+             climate = envsto, sig2e = sig2,
+             A_LH = which(sapply(MPMs, function(e) identical(M, e))))
+  }) # envir.stoch for an environment across matrices, end list
+    do.call(rbind, lapply(envir.stoch, function(x) x[nrow(x),]))
+    })) # bind simulations of each environment
+  simEnv.out
+}
+
+
+### TEST!
+# betaS <- 1
+# betaF <- -1
+# sig2 <- 0.3
+# beta0climate <- 0
+# beta1climate <- 0.8
+# envsto <- "auto"
+# M <- MPMs_all[[1]]
+# StPopSz <- 50
+# e <- 0
+# sim <- 1
+# rN <- 100
+# MPMs <- MPM_stoch(sampsz = 3, age1 = lh$age[rN], p_a = lh$P_a[rN], m1 = lh$m[rN], 
+#                       p_j = lh$P_j[rN], sig2D = 0.001) 
+# nreps <- 3
+
+#### Need a lite version with only summary data
+simEnv.lite <- function(MPMs, nreps, Y, StPopSz, e=0, betaS, betaF, 
+                        beta0climate = 0, beta1climate, sig2,
+                   envsto = c("linear","autocoreelated")){
+  simEnv.out <- do.call(rbind,lapply(1:nreps, function(sim){
+    ## Simulate a new environment 
+    if(grepl(envsto, "linear"))  D <- envi.linfunc.g(Y, alpha = beta0climate, 
+                                                     beta = beta1climate, sig2 = sig2)
+    if(grepl(envsto, "autocorrelated")) D <- envi.func.g(alpha = beta0climate, 
+                                                         beta = beta1climate, sig2 = sig2, Y=Y)
+    envir.stoch <- lapply(MPMs, function(M){
+      # Work through the list of matrices for the same environment
+      yr <- c(1)
+      w <- popbio::stable.stage(M)
+      N <- list(matrix(round(StPopSz*w,0)))
+      Mx <- lapply(1:Y, function(i) M) 
+      # how much the environmental driver can impact juvenile survival
+      surv.ab.juv <- survlinkparams(M = M)
+      Ext01 <- 0
+          
+      for(ti in 2:Y){
+        ## Survival juveniles
+        survJ <- env2survlink(M = M, surv = surv.ab.juv[1], absurv = surv.ab.juv[2:3],
+                              betaS = betaS, ## slope at inflection
+                              D_t=D[ti], e=e)
+        
+        ## Juvenile survival diagonal only works if dim(Mx) > 1
+        if(dim(M)[1]==2){
+            Mx[[ti]][-1,-dim(M)[2]] <- survJ
+          } else {
+            diag(Mx[[ti]][-1,-dim(M)[2] ]) <- survJ
+          }
+
+        ## fertility f = P_x * m; fertility cannot drop below 0 or above 95%HDPI
+        Mx[[ti]][1,(dim(M)[1]-1):(dim(M)[1])] <- env2fertlink(M, betaF = betaF,
+                                                              D=D[ti])
+          
+        yr[ti] <- ti
+        N[[ti]] <- round(Mx[[ti]] %*% N[[ti-1]],0)
+        
+        if(sum(N[[ti]]) < 5){ 
+          Ext01 <- 1
+          break
+          }
+      }
+  data.frame(Year = max(yr), N = sum(N[[max(yr)]]), 
+             age = dim(M)[1]-1, 
+             m0 = M[1,dim(M)[1]-1]/M[2,1], 
+             p_a0 =  M[dim(M)[1],dim(M)[1]],
+             p_j0 = M[2,1],
+             sim = sim, StPopSz = StPopSz, Ext = Ext01,
+             climate = envsto, sig2e = sig2,
+             A_LH = which(sapply(MPMs, function(e) identical(M, e))))
+  }) # envir.stoch for an environment across matrices, end list
+    do.call(rbind, envir.stoch)
+    })) # bind simulations of each environment
+  simEnv.out
+}
+
+load("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/lifehistories2022-03-05.Rdata")
+
+# matrices 
+MPMs_all <- lapply(1:nrow(lh), function(i){
+  MPM_age(pi_j = lh$P_j[i], pi_a = lh$P_a[i], m = lh$m[i], age = lh$age[i])
+})
+
+```
+
+
+
