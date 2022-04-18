@@ -1,40 +1,12 @@
 ---
 title: "Simulate Demographic stochasticity"
-output: html_document
+author: Michelle DePrenger-Levin
 ---
 
 
-
-
-Load 
-```{r}
-dateSaved <- "2022-03-09"
-
-load(paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/Time2Ext.demo.stpopsz,sig2", dateSaved,".Rdata", sep = ""))
-
-lmbds.demo <- do.call(rbind,lapply(PopDyn.lh.sig.popsz, function(i1){
-  i1out <- do.call(rbind, lapply(i1, function(i2){
-    i2[[1]]
-  }))
-  i1out
-}))
-
-PopDyn.demo <- do.call(rbind,lapply(PopDyn.lh.sig.popsz, function(i1){
-  i1out <- do.call(rbind, lapply(i1, function(i2){
-    i2[[2]]
-  }))
-  i1out
-}))
-
-rm(PopDyn.lh.sig.popsz)
-gc()
-```
-
-
-Add a parallel process to speed up 2022-03-03
 ```{r, eval = FALSE}
-detectCores() # 12
-registerDoParallel(10) # .onUnload will automatically stop the cluster 
+detectCores() 
+registerDoParallel(10) 
 
 StPopSz <- c(50,100,500)
 sig2d <- seq(0.001, 1e-5, length.out = 3)
@@ -44,8 +16,8 @@ Y <- 100
 PopDyn.lh.sig.popsz <- 
   foreach(SPS = StPopSz, .packages = c("popbio","foreach"), .combine = c, 
           .multicombine = TRUE) %dopar% {
-    foreach(s2s = sig2d) %dopar% {    # PopDyn.lh <- .combine = 'comb'
-      foreach(rowN = 1:nrow(lh)) %do% {      # sig2.1 <-    , .combine = 'comb'
+    foreach(s2s = sig2d) %dopar% {   
+      foreach(rowN = 1:nrow(lh)) %do% {      
         
         MPMs1 <- MPM_stoch(sampsz = sampsz, age1 = lh$age[rowN],
                            p_a = lh$P_a[rowN], p_j = lh$P_j[rowN],
@@ -73,8 +45,6 @@ PopDyn.lh.sig.popsz <-
     }
   }
 
-save(PopDyn.lh.sig.popsz, file = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Rdatas/Time2Ext.demo.stpopsz,sig2", Sys.Date(),".Rdata", sep = ""))
-
 lmbds.demo <- do.call(rbind,lapply(PopDyn.lh.sig.popsz, function(i1){
   i1out <- do.call(rbind, lapply(i1, function(i2){
     i2[[1]]
@@ -95,7 +65,7 @@ gc()
 
 
 ```{r}
-# Create lmbds.demo and PopDyn in first chunk
+# Bins and categories
 lmbds.demo$parity <- ifelse(lmbds.demo$p_a == 0, "semel", "itero")
 lmbds.demo$agebin <- cut_number(lmbds.demo$age, 3)
 
@@ -154,10 +124,8 @@ demoPld <- ggplot(lmbds.demo, aes(y=(Lambda-1), x= as.factor(sig2D), colour = pa
   xlab(expression(sigma[D]^2))+
   ggtitle("d)")
 
-ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/Demolambdas", Sys.Date(),".jpg", sep=""),
- (demoPla + demoPlb)/(demoPlc + demoPld),
-width=250, height=190,units='mm', dpi=300)
 
+ (demoPla + demoPlb)/(demoPlc + demoPld)
 
 rm(lmbds.demo)
 gc()
@@ -168,8 +136,7 @@ gc()
 #################### 2022-03-01 #################### 
 
 ```{r}
-
-
+# Bins and categories
 PopDyn.demo$parity <- "itero"
 PopDyn.demo$parity[PopDyn.demo$p_a == 0] <- "semel"
 PopDyn.demo$pjbin <- cut_number(PopDyn.demo$p_j, 3) # groups with ca == # obs
@@ -242,9 +209,8 @@ Time2Extd <- ggplot(PopDyn.demo, aes(Year, colour = pabin))+
   ggtitle("d)")+
   ylab("")
 
-ggsave(filename = paste("C:/Users/DePrengm/OneDrive - Denver Botanic Gardens/P drive/My Documents/UCDenver_phd/Dissertation/Chapter3/Figures/DemoTime2Ext", Sys.Date(),".jpg", sep=""),
-  (Time2Exta + Time2Extb)/(Time2Extc + Time2Extd),
-width=270, height=200,units='mm', dpi=300)
+  (Time2Exta + Time2Extb)/(Time2Extc + Time2Extd)
+
 ```
 
 
